@@ -1,0 +1,63 @@
+body {
+    background-color: #0f1116;
+    color: #ffffff;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    margin: 20px;
+}
+
+.samantha-container {
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 80px); /* Adjust based on navbar */
+}
+
+.control-bar {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    padding: 10px;
+    background-color: #161b22;
+    border-bottom: 1px solid #30363d;
+}
+
+.editor-split {
+    display: flex;
+    flex: 1;
+    gap: 10px;
+}
+
+.editor-area, .preview-area {
+    flex: 1;
+    border: 1px solid #30363d;
+    background-color: #161b22;
+    padding: 10px;
+    border-radius: 6px;
+    display: flex;
+    flex-direction: column;
+}
+
+.visualization-canvas {
+    flex: 2;
+    border-bottom: 1px solid #30363d;
+    margin-bottom: 10px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    color: #8b949e;
+}
+
+.log-viewer {
+    flex: 1;
+    overflow-y: auto;
+}
+
+.python-editor {
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    color: #e6edf3;
+    border: none;
+    font-family: 'Courier New', Courier, monospace;
+    resize: none;
+    outline: none;
+}

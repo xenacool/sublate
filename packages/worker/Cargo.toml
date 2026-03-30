@@ -1,0 +1,19 @@
+[package]
+name = "worker"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+dioxus.workspace = true
+gloo-worker.workspace = true
+serde.workspace = true
+rustpython-vm.workspace = true
+ui.workspace = true
+serde_json.workspace = true
+velato.workspace = true
+vello.workspace = true
+peniko.workspace = true
+kurbo.workspace = true
+num-traits = "0.2"
+futures = "0.3"
+wasm-bindgen = { workspace = true }

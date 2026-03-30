@@ -1,0 +1,12 @@
+//! This crate contains all shared UI for the workspace.
+
+mod hero;
+pub use hero::Hero;
+
+mod navbar;
+pub use navbar::Navbar;
+
+pub mod algorithm;
+pub mod state_machine;
+pub mod python_vm;
+pub mod components;

@@ -1,0 +1,34 @@
+[workspace]
+resolver = "2"
+members = [
+    "packages/ui",
+    "packages/web",
+    "packages/desktop",
+    "packages/mobile",
+    "packages/worker",
+]
+
+[workspace.dependencies]
+velato = "0.9.0"
+vello = "0.7.0"
+peniko = "0.6.0"
+getrandom = { version = "0.3", features = ["wasm_js"] }
+dioxus = { version = "0.7.1" }
+rustpython-vm = "0.4.0"
+tween = "2.2.0"
+kurbo = "0.13"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+instant = { version = "0.1", features = ["wasm-bindgen"] }
+hegeltest = "0.3.5"
+hegeltest-macros = "0.3.5"
+gloo-worker = { version = "0.6.0", features = ["futures"] }
+num-traits = "0.2"
+wasm-bindgen = "=0.2.114"
+web-sys = { version = "=0.3.91", features = ["Worker"] }
+js-sys = "=0.3.91"
+wasm-bindgen-futures = "=0.4.51"
+
+# workspace
+ui = { path = "packages/ui" }
+

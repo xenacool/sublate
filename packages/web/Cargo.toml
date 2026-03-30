@@ -1,0 +1,19 @@
+[package]
+name = "web"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+dioxus = { workspace = true, features = ["router"] }
+ui = { workspace = true }
+velato = { workspace = true }
+kurbo = { workspace = true }
+worker = { path = "../worker" }
+getrandom = { workspace = true }
+tokio = { version = "1.0", features = ["sync", "macros"] }
+futures = "0.3"
+
+[features]
+default = ["web"]
+web = ["dioxus/web"]
+

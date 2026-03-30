@@ -1,0 +1,6 @@
+{
+  "name": "sublate",
+  "devDependencies": {
+    "@playwright/test": "^1.56.1"
+  }
+}
