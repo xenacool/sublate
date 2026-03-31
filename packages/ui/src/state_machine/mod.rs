@@ -12,8 +12,8 @@ pub struct SAM {
     pub transitions: Vec<Transition>,
     /// The entry point state.
     pub entry_state: String,
-    /// The Lottie composition as a JSON value (for serialization).
-    pub lottie_json: serde_json::Value,
+    /// The Lottie composition as a JSON string (for reliable serialization).
+    pub lottie_json: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -55,7 +55,7 @@ impl Default for SAM {
             states: HashMap::new(),
             transitions: Vec::new(),
             entry_state: String::new(),
-            lottie_json: serde_json::Value::Null,
+            lottie_json: "{}".to_string(),
         }
     }
 }

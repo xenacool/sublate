@@ -5,15 +5,11 @@ edition = "2021"
 
 [dependencies]
 dioxus = { workspace = true }
-rustpython-vm = { workspace = true }
 tween = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
-instant = { workspace = true }
-hegeltest = { workspace = true }
+# DO NOT REMOVE the build will break
 getrandom = { workspace = true }
 velato = { workspace = true }
 kurbo = { workspace = true }
 peniko = { workspace = true }
-vello = { workspace = true }
 

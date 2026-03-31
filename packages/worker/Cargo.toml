@@ -4,16 +4,13 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-dioxus.workspace = true
+console_error_panic_hook = "0.1.7"
+web-sys = { version = "0.3.70", features = ["console"] }
 gloo-worker.workspace = true
 serde.workspace = true
 rustpython-vm.workspace = true
 ui.workspace = true
 serde_json.workspace = true
-velato.workspace = true
-vello.workspace = true
-peniko.workspace = true
-kurbo.workspace = true
 num-traits = "0.2"
 futures = "0.3"
 wasm-bindgen = { workspace = true }

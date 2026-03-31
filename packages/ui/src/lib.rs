@@ -8,5 +8,4 @@ pub use navbar::Navbar;
 
 pub mod algorithm;
 pub mod state_machine;
-pub mod python_vm;
 pub mod components;

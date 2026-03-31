@@ -3,6 +3,7 @@ use worker::{Input, Output, ReliableInput, ReliableOutput, Envelope};
 use futures::{StreamExt, SinkExt};
 use ui::state_machine::{SAM, AnimationState};
 use velato::{Renderer, model};
+use serde_json;
 
 #[component]
 pub fn Samantha() -> Element {
@@ -13,6 +14,19 @@ pub fn Samantha() -> Element {
     let mut lottie_coroutine = use_coroutine(move |mut rx: UnboundedReceiver<(String, Vec<i32>)>| async move {
         let mut bridge = worker::spawn();
         let mut next_input_seq = 0u64;
+
+        // Handshake
+        let _ = bridge.send(ReliableInput::Msg(Envelope {
+            seq: next_input_seq,
+            msg: Input::Init("2 + 2".to_string()),
+        })).await;
+        next_input_seq += 1;
+
+        if let Some(ReliableOutput::Msg(envelope)) = bridge.next().await {
+            if let Output::InitResult(res) = envelope.msg {
+                println!("Lottie Coroutine Handshake: {}", res);
+            }
+        }
 
         loop {
             tokio::select! {
@@ -46,6 +60,19 @@ pub fn Samantha() -> Element {
         async move {
             let mut bridge = worker::spawn();
             let mut next_input_seq = 0u64;
+
+            // Handshake
+            let _ = bridge.send(ReliableInput::Msg(Envelope {
+                seq: next_input_seq,
+                msg: Input::Init("1 + 1".to_string()),
+            })).await;
+            next_input_seq += 1;
+
+            if let Some(ReliableOutput::Msg(envelope)) = bridge.next().await {
+                if let Output::InitResult(res) = envelope.msg {
+                    hegel_logs.write().push(format!("Hegel Coroutine Handshake: {}", res));
+                }
+            }
 
             loop {
                 tokio::select! {
@@ -131,7 +158,18 @@ fn SvgPreview(sam: SAM) -> Element {
     let current_state = sam.states.get(&current_state_name()).cloned();
 
     if let Some(state) = current_state {
-        let composition = velato::Composition::from_json(sam.lottie_json.clone()).unwrap();
+        let json_value: serde_json::Value = match serde_json::from_str(&sam.lottie_json) {
+            Ok(v) => v,
+            Err(e) => {
+                return rsx! { div { "Failed to parse Lottie JSON: {e}" } };
+            }
+        };
+        let composition = match velato::Composition::from_json(json_value) {
+            Ok(c) => c,
+            Err(e) => {
+                return rsx! { div { "Failed to load Velato composition: {e}" } };
+            }
+        };
         let frame = state.frame_range.map(|(s, _)| s).unwrap_or(0.0);
         
         let mut renderer = Renderer::new();

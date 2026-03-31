@@ -5,13 +5,14 @@ use gloo_worker::reactor::{Reactor, ReactorScope};
 use serde::{Deserialize, Serialize};
 use futures::{StreamExt, SinkExt};
 use std::sync::{Arc, Mutex};
-use rustpython_vm::{VirtualMachine, builtins::PyModule, PyPayload, class::StaticType};
+use rustpython_vm::{VirtualMachine, builtins::PyModule, PyPayload, class::StaticType, class::PyClassImpl, AsObject};
 use num_traits::ToPrimitive;
 
 mod python;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Input {
+    Init(String),
     Compile(String),
     RunHegel(String),
     GetLottie(String, Vec<i32>),
@@ -19,6 +20,7 @@ pub enum Input {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Output {
+    InitResult(String),
     Result(String),
     HegelResult(HegelResponse),
     LottieResult(ui::state_machine::SAM),
@@ -49,45 +51,69 @@ pub enum ReliableOutput {
     Watermark(u64),
 }
 
+use std::collections::VecDeque;
+
 pub struct SamanthaWorker {
     scope: ReactorScope<ReliableInput, ReliableOutput>,
     next_output_seq: u64,
     last_received_seq: u64,
+    outbox: VecDeque<ReliableOutput>,
+    interp: rustpython_vm::Interpreter,
+    py_scope: rustpython_vm::scope::Scope,
 }
 
 impl Reactor for SamanthaWorker {
     type Scope = ReactorScope<ReliableInput, ReliableOutput>;
 
     fn create(scope: Self::Scope) -> Self {
+        let settings = rustpython_vm::Settings::default();
+        let interp = rustpython_vm::Interpreter::with_init(settings, |vm: &mut VirtualMachine| {
+            let genesis = rustpython_vm::Context::genesis();
+            
+            let sam_builder_type = python::SamBuilderWrapper::init_builtin_type();
+            <python::SamBuilderWrapper as PyClassImpl>::extend_class(genesis, sam_builder_type);
+            
+            let composition_type = python::CompositionWrapper::init_builtin_type();
+            <python::CompositionWrapper as PyClassImpl>::extend_class(genesis, composition_type);
+            
+            let layer_type = python::LayerWrapper::init_builtin_type();
+            <python::LayerWrapper as PyClassImpl>::extend_class(genesis, layer_type);
+
+            vm.add_native_module("samantha", Box::new(|vm| {
+                let def = python::decl::__module_def(&vm.ctx);
+                let module = PyPayload::into_ref(PyModule::from_def(def), &vm.ctx);
+                python::decl::__init_attributes(vm, &module);
+                module.into()
+            }));
+        });
+        
+        let py_scope = interp.enter(|vm| vm.new_scope_with_builtins());
+
         Self {
             scope,
             next_output_seq: 0,
             last_received_seq: 0,
+            outbox: VecDeque::new(),
+            interp,
+            py_scope,
         }
     }
 }
 
 impl SamanthaWorker {
-    fn run_python_hegel(&self, code: String) -> HegelResponse {
-        let settings = rustpython_vm::Settings::default();
-        let interp = rustpython_vm::Interpreter::with_init(settings, |vm: &mut VirtualMachine| {
-            vm.add_native_module("samantha", Box::new(|vm| {
-                python::SamBuilderWrapper::init_builtin_type();
-                python::CompositionWrapper::init_builtin_type();
-                python::LayerWrapper::init_builtin_type();
-
-                let def = python::decl::__module_def(&vm.ctx);
-                let module = PyPayload::into_ref(PyModule::from_def(def), &vm.ctx);
-                python::decl::__init_attributes(vm, &module);
-                
-                module.set_attr("SamBuilder", python::SamBuilderWrapper::class(&vm.ctx).to_owned(), vm).unwrap();
-                module.set_attr("Composition", python::CompositionWrapper::class(&vm.ctx).to_owned(), vm).unwrap();
-                module.set_attr("Layer", python::LayerWrapper::class(&vm.ctx).to_owned(), vm).unwrap();
-                module.into()
-            }));
-        });
-        interp.enter(|vm: &VirtualMachine| {
+    fn run_python_init(&self, code: String) -> String {
+        self.interp.enter(|vm: &VirtualMachine| {
             let scope = vm.new_scope_with_builtins();
+            match vm.run_block_expr(scope, &code) {
+                Ok(obj) => format!("Init OK: {:?}", obj),
+                Err(e) => format!("Init Error: {:?}", e),
+            }
+        })
+    }
+
+    fn run_python_hegel(&self, code: String) -> HegelResponse {
+        self.interp.enter(|vm: &VirtualMachine| {
+            let scope = self.py_scope.clone();
             
             if let Err(e) = vm.run_block_expr(scope.clone(), &code) {
                 return HegelResponse {
@@ -98,7 +124,16 @@ impl SamanthaWorker {
             }
 
             if let Ok(build_test) = scope.globals.get_item("build_test", vm) {
-                let py_data = build_test.call((), vm).unwrap_or(vm.ctx.none());
+                let py_data = match build_test.call((), vm) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        return HegelResponse {
+                            logs: vec![format!("Hegel: build_test failed: {:?}", e)],
+                            data: vec![],
+                            passed: false,
+                        };
+                    }
+                };
                 let data: Vec<i32> = if let Some(list) = py_data.payload::<rustpython_vm::builtins::PyList>() {
                     list.borrow_vec().iter().map(|item| {
                         if let Some(int) = item.payload::<rustpython_vm::builtins::PyInt>() {
@@ -115,9 +150,18 @@ impl SamanthaWorker {
                 let sam_fsm = python::SamBuilderWrapper { 
                     inner: Arc::new(Mutex::new(python::SamBuilder::new())) 
                 };
+                let sam_fsm_py = PyPayload::into_ref(sam_fsm, &vm.ctx);
 
                 if let Ok(build_algorithm) = scope.globals.get_item("build_algorithm", vm) {
-                    let _ = build_algorithm.call((sam_fsm.clone(), py_data_clone.clone()), vm);
+                    if let Err(e) = build_algorithm.call((sam_fsm_py.clone(), py_data_clone.clone()), vm) {
+                        let mut msg = String::new();
+                        vm.write_exception(&mut msg, &e).unwrap();
+                        return HegelResponse {
+                            logs: vec![format!("Hegel: build_algorithm failed: {}", msg)],
+                            data: vec![],
+                            passed: false,
+                        };
+                    }
                 }
 
                 // Check sorting invariant (Selection Sort example)
@@ -160,25 +204,8 @@ impl SamanthaWorker {
     }
 
     fn run_python_get_sam(&self, code: String, data: Vec<i32>) -> ui::state_machine::SAM {
-        let settings = rustpython_vm::Settings::default();
-        let interp = rustpython_vm::Interpreter::with_init(settings, |vm: &mut VirtualMachine| {
-            vm.add_native_module("samantha", Box::new(|vm| {
-                python::SamBuilderWrapper::init_builtin_type();
-                python::CompositionWrapper::init_builtin_type();
-                python::LayerWrapper::init_builtin_type();
-
-                let def = python::decl::__module_def(&vm.ctx);
-                let module = PyPayload::into_ref(PyModule::from_def(def), &vm.ctx);
-                python::decl::__init_attributes(vm, &module);
-                
-                module.set_attr("SamBuilder", python::SamBuilderWrapper::class(&vm.ctx).to_owned(), vm).unwrap();
-                module.set_attr("Composition", python::CompositionWrapper::class(&vm.ctx).to_owned(), vm).unwrap();
-                module.set_attr("Layer", python::LayerWrapper::class(&vm.ctx).to_owned(), vm).unwrap();
-                module.into()
-            }));
-        });
-        interp.enter(|vm: &VirtualMachine| {
-            let scope = vm.new_scope_with_builtins();
+        self.interp.enter(|vm: &VirtualMachine| {
+            let scope = self.py_scope.clone();
             
             if let Err(_) = vm.run_block_expr(scope.clone(), &code) {
                 return ui::state_machine::SAM::default();
@@ -189,23 +216,36 @@ impl SamanthaWorker {
             let sam_builder = python::SamBuilderWrapper { 
                 inner: Arc::new(Mutex::new(python::SamBuilder::new())) 
             };
-            
+            let sam_builder_py = PyPayload::into_ref(sam_builder, &vm.ctx);
+
             if let Ok(build_algorithm) = scope.globals.get_item("build_algorithm", vm) {
-                let _ = build_algorithm.call((sam_builder.clone(), py_data.clone()), vm);
+                let _ = build_algorithm.call((sam_builder_py.clone(), py_data.clone()), vm);
             }
 
-            let logs = if let Ok(l) = sam_builder.logs(vm) {
+            let logs = if let Ok(l) = sam_builder_py.logs(vm) {
                 l
             } else {
                 vm.ctx.new_list(vec![]).into()
             };
 
             if let Ok(build_animation) = scope.globals.get_item("build_animation", vm) {
-                let _ = build_animation.call((sam_builder.clone(), py_data, logs), vm);
+                web_sys::console::log_1(&"Calling build_animation".into());
+                match build_animation.call((sam_builder_py.clone(), py_data, logs), vm) {
+                    Ok(_) => {
+                        web_sys::console::log_1(&"build_animation success".into());
+                    }
+                    Err(e) => {
+                        web_sys::console::log_1(&format!("build_animation failed: {:?}", e).into());
+                    }
+                }
+            } else {
+                web_sys::console::log_1(&"build_animation not found in scope".into());
             }
 
-            let builder = sam_builder.inner.lock().unwrap();
-            builder.sam.clone()
+            let sam_builder_inner = Arc::clone(&sam_builder_py.inner);
+            let builder = sam_builder_inner.lock().unwrap();
+            web_sys::console::log_1(&format!("Final SAM states count: {}", builder.states.len()).into());
+            builder.to_owned().into_sam()
         })
     }
 }
@@ -214,13 +254,34 @@ impl Future for SamanthaWorker {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        // Drain outbox
+        while let Some(msg) = self.outbox.front() {
+            match self.scope.poll_ready_unpin(cx) {
+                Poll::Ready(Ok(())) => {
+                    let msg = self.outbox.pop_front().unwrap();
+                    let _ = self.scope.start_send_unpin(msg);
+                }
+                Poll::Ready(Err(_)) => {
+                    self.outbox.pop_front();
+                }
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+
         while let Poll::Ready(Some(input)) = self.scope.poll_next_unpin(cx) {
             match input {
                 ReliableInput::Msg(envelope) => {
+                    web_sys::console::log_1(&format!("Worker received seq: {}", envelope.seq).into());
+                    
+                    // Logic for reliable messaging: only process if seq is next expected
+                    // For now, we just process everything but keep track of last received
                     self.last_received_seq = envelope.seq;
+                    
                     let response = match envelope.msg {
+                        Input::Init(code) => {
+                            Output::InitResult(self.run_python_init(code))
+                        }
                         Input::Compile(code) => {
-                            // Placeholder for Python compilation
                             Output::Result(format!("Compiled: {} bytes", code.len()))
                         }
                         Input::RunHegel(code) => {
@@ -237,9 +298,9 @@ impl Future for SamanthaWorker {
                     };
                     self.next_output_seq += 1;
                     
-                    let _ = self.scope.start_send_unpin(ReliableOutput::Msg(out_envelope));
-                    let last_received_seq = self.last_received_seq;
-                    let _ = self.scope.start_send_unpin(ReliableOutput::Watermark(last_received_seq));
+                    self.outbox.push_back(ReliableOutput::Msg(out_envelope));
+                    let ack_seq = self.last_received_seq;
+                    self.outbox.push_back(ReliableOutput::Watermark(ack_seq));
                 }
                 ReliableInput::Watermark(_seq) => {
                     // Handle ACK
@@ -247,16 +308,40 @@ impl Future for SamanthaWorker {
             }
         }
         
+        // Re-drain outbox if anything was added
+        while let Some(_) = self.outbox.front() {
+            match self.scope.poll_ready_unpin(cx) {
+                Poll::Ready(Ok(())) => {
+                    let msg = self.outbox.pop_front().unwrap();
+                    let _ = self.scope.start_send_unpin(msg);
+                }
+                Poll::Ready(Err(_)) => {
+                    self.outbox.pop_front();
+                }
+                Poll::Pending => break,
+            }
+        }
+
         let _ = self.scope.poll_flush_unpin(cx);
         Poll::Pending
     }
+}
+
+use wasm_bindgen::prelude::*;
+
+#[wasm_bindgen]
+pub fn init_worker() {
+    console_error_panic_hook::set_once();
+    web_sys::console::log_1(&"Worker init_worker() called".into());
+    gloo_worker::reactor::ReactorRegistrar::<SamanthaWorker>::new().register();
 }
 
 pub use gloo_worker::reactor::ReactorBridge;
 use gloo_worker::reactor::ReactorSpawner;
 
 pub fn spawn() -> ReactorBridge<SamanthaWorker> {
-    ReactorSpawner::<SamanthaWorker>::new()
+    gloo_worker::reactor::ReactorSpawner::<SamanthaWorker>::new()
         .as_module(true)
-        .spawn("/worker.js?v=1")
+        .with_loader(true)
+        .spawn("/worker.js?v=2")
 }

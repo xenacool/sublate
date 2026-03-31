@@ -46,6 +46,12 @@ build-worker:
 	wasm-bindgen target/$(TARGET_WASM)/release/worker.wasm --out-dir $(WORKER_OUT) --target web --no-typescript
 	cp $(WORKER_OUT)/worker.js $(ASSETS_DIR)/worker_lib.js
 	cp $(WORKER_OUT)/worker_bg.wasm $(ASSETS_DIR)/worker_bg.wasm
+	# Copy to public dir if it exists
+	@if [ -d target/dx/web/debug/web/public ]; then \
+		cp $(WORKER_OUT)/worker.js target/dx/web/debug/web/public/worker_lib.js; \
+		cp $(WORKER_OUT)/worker_bg.wasm target/dx/web/debug/web/public/worker_bg.wasm; \
+		cp packages/web/assets/worker.js target/dx/web/debug/web/public/worker.js; \
+	fi
 	@echo "Worker built and assets copied."
 
 serve: build-worker
@@ -56,6 +62,10 @@ serve: build-worker
 build-web: build-worker
 	@echo "Building web application (debug mode)..."
 	dx build --package web
+	@echo "Copying worker assets to public directory..."
+	@cp $(ASSETS_DIR)/worker_lib.js $(DX_PUBLIC_DIR)/worker_lib.js
+	@cp $(ASSETS_DIR)/worker_bg.wasm $(DX_PUBLIC_DIR)/worker_bg.wasm
+	@cp packages/web/assets/worker.js $(DX_PUBLIC_DIR)/worker.js
 	@$(MAKE) patch-debug
 
 build-release: build-worker
@@ -65,14 +75,12 @@ build-release: build-worker
 
 patch-debug:
 	@echo "Patching debug build with console.createTask polyfill..."
-	@sed -i '1i$(POLYFILL)' $(DX_PUBLIC_DIR)/wasm/web.js
-	@sed -i '/<head>/a <script>$(POLYFILL)</script>' $(DX_PUBLIC_DIR)/index.html
+	@python3 patch_public.py $(DX_PUBLIC_DIR)
 	@echo "Debug build patched."
 
 patch-release:
 	@echo "Patching release build with console.createTask polyfill..."
-	@sed -i '1i$(POLYFILL)' $(DX_RELEASE_DIR)/wasm/web.js
-	@sed -i '/<head>/a <script>$(POLYFILL)</script>' $(DX_RELEASE_DIR)/index.html
+	@python3 patch_public.py $(DX_RELEASE_DIR)
 	@echo "Release build patched."
 
 test:

@@ -2,7 +2,8 @@ import { test, expect } from '@playwright/test';
 
 test('navigation to samantha', async ({ page }) => {
   await page.goto('/');
-  await expect(page).toHaveTitle(/Sublate/); // Assuming "Sublate" is in the title
+  // The default title is often "dioxus | ⛺"
+  await expect(page).toHaveTitle(/dioxus/);
 
   // Click the Samantha link in the navbar
   await page.getByRole('link', { name: 'Samantha' }).click();

@@ -18,7 +18,7 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: 'dx serve',
+    command: 'node server.js target/dx/web/debug/web/public',
     url: 'http://localhost:8080',
     reuseExistingServer: !process.env.CI,
   },
